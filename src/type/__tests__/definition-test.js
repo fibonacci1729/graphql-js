@@ -374,23 +374,10 @@ describe('Type System: Example', () => {
     });
   });
 
-  it('prohibits putting non-Object types in unions', () => {
-    const badUnionTypes = [
-      GraphQLInt,
-      GraphQLNonNull(GraphQLInt),
-      GraphQLList(GraphQLInt),
-      InterfaceType,
-      UnionType,
-      EnumType,
-      InputObjectType,
-    ];
-    badUnionTypes.forEach(x => {
-      expect(() =>
-        new GraphQLUnionType({ name: 'BadUnion', types: [x] }).getTypes(),
-      ).to.throw(
-        `BadUnion may only contain Object types, it cannot contain: ${x}.`,
-      );
-    });
+  it('prohibits nesting NonNull inside NonNull', () => {
+    expect(() => GraphQLNonNull(GraphQLNonNull(GraphQLInt))).to.throw(
+      'Can only create NonNull of a Nullable GraphQLType but got: Int!.',
+    );
   });
 
   it("allows a thunk for Union's types", () => {

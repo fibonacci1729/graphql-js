@@ -22,8 +22,10 @@ import {
   GraphQLNonNull,
   GraphQLString,
 } from '../../';
+import { parse } from '../../language/parser';
 import { validateSchema } from '../validate';
 import { buildSchema } from '../../utilities/buildASTSchema';
+import { extendSchema } from '../../utilities/extendSchema';
 
 const SomeScalarType = new GraphQLScalarType({
   name: 'SomeScalar',
@@ -224,7 +226,7 @@ describe('Type System: A Schema must have Object root types', () => {
     `);
     expect(validateSchema(schema)).to.containSubset([
       {
-        message: 'Query root type must be Object type but got: Query.',
+        message: 'Query root type must be Object type, it cannot be Query.',
         locations: [{ line: 2, column: 7 }],
       },
     ]);
@@ -241,7 +243,7 @@ describe('Type System: A Schema must have Object root types', () => {
     expect(validateSchema(schemaWithDef)).to.containSubset([
       {
         message:
-          'Query root type must be Object type but got: SomeInputObject.',
+          'Query root type must be Object type, it cannot be SomeInputObject.',
         locations: [{ line: 3, column: 16 }],
       },
     ]);
@@ -260,7 +262,7 @@ describe('Type System: A Schema must have Object root types', () => {
     expect(validateSchema(schema)).to.containSubset([
       {
         message:
-          'Mutation root type must be Object type if provided but got: Mutation.',
+          'Mutation root type must be Object type if provided, it cannot be Mutation.',
         locations: [{ line: 6, column: 7 }],
       },
     ]);
@@ -282,7 +284,7 @@ describe('Type System: A Schema must have Object root types', () => {
     expect(validateSchema(schemaWithDef)).to.containSubset([
       {
         message:
-          'Mutation root type must be Object type if provided but got: SomeInputObject.',
+          'Mutation root type must be Object type if provided, it cannot be SomeInputObject.',
         locations: [{ line: 4, column: 19 }],
       },
     ]);
@@ -301,7 +303,7 @@ describe('Type System: A Schema must have Object root types', () => {
     expect(validateSchema(schema)).to.containSubset([
       {
         message:
-          'Subscription root type must be Object type if provided but got: Subscription.',
+          'Subscription root type must be Object type if provided, it cannot be Subscription.',
         locations: [{ line: 6, column: 7 }],
       },
     ]);
@@ -323,7 +325,7 @@ describe('Type System: A Schema must have Object root types', () => {
     expect(validateSchema(schemaWithDef)).to.containSubset([
       {
         message:
-          'Subscription root type must be Object type if provided but got: SomeInputObject.',
+          'Subscription root type must be Object type if provided, it cannot be SomeInputObject.',
         locations: [{ line: 4, column: 23 }],
       },
     ]);
@@ -459,18 +461,22 @@ describe('Type System: Objects must have fields', () => {
   });
 
   it('rejects an Object type with missing fields', () => {
-    expect(() =>
-      schemaWithFieldType(
-        new GraphQLObjectType({
-          name: 'SomeObject',
-        }),
-      ),
-    ).to.throw(
-      'SomeObject fields must be an object with field names as keys or a ' +
-        'function which returns such an object.',
-    );
+    const schema = buildSchema(`
+      type Query {
+        test: IncompleteObject
+      }
+
+      type IncompleteObject
+    `);
+    expect(validateSchema(schema)).to.containSubset([
+      {
+        message: 'Type IncompleteObject must define one or more fields.',
+        locations: [{ line: 6, column: 7 }],
+      },
+    ]);
   });
 
+  // TODO: move to definition
   it('rejects an Object type field with undefined config', () => {
     expect(() =>
       schemaWithFieldType(
@@ -485,40 +491,19 @@ describe('Type System: Objects must have fields', () => {
   });
 
   it('rejects an Object type with incorrectly named fields', () => {
-    expect(() =>
-      schemaWithFieldType(
-        new GraphQLObjectType({
-          name: 'SomeObject',
-          fields: { 'bad-name-with-dashes': { type: GraphQLString } },
-        }),
-      ),
-    ).to.throw(
-      'Names must match /^[_a-zA-Z][_a-zA-Z0-9]*$/ but "bad-name-with-dashes" does not.',
+    const schema = schemaWithFieldType(
+      new GraphQLObjectType({
+        name: 'SomeObject',
+        fields: { 'bad-name-with-dashes': { type: GraphQLString } },
+      }),
     );
-  });
-
-  it('warns about an Object type with reserved named fields', () => {
-    /* eslint-disable no-console */
-    const realConsoleWarn = console.warn;
-    const calls = [];
-    console.warn = function() {
-      calls.push(Array.prototype.slice.call(arguments));
-    };
-    try {
-      schemaWithFieldType(
-        new GraphQLObjectType({
-          name: 'SomeObject',
-          fields: { __notPartOfIntrospection: { type: GraphQLString } },
-        }),
-      );
-
-      expect(calls[0][0]).contains(
-        'Name "__notPartOfIntrospection" must not begin with "__", which is reserved by GraphQL introspection.',
-      );
-    } finally {
-      console.warn = realConsoleWarn;
-    }
-    /* eslint-enable no-console */
+    expect(validateSchema(schema)).to.containSubset([
+      {
+        message:
+          'Names must match /^[_a-zA-Z][_a-zA-Z0-9]*$/ but ' +
+          '"bad-name-with-dashes" does not.',
+      },
+    ]);
   });
 
   it('rejects an Object type with incorrectly typed fields', () => {
@@ -724,6 +709,7 @@ describe('Type System: Object interfaces must be array', () => {
 });
 
 describe('Type System: Union types must be array', () => {
+  // TODO: move this to definition-test?
   it('accepts a Union type with array types', () => {
     expect(() =>
       schemaWithFieldType(
@@ -735,6 +721,7 @@ describe('Type System: Union types must be array', () => {
     ).not.to.throw();
   });
 
+  // TODO: move this to definition-test?
   it('accepts a Union type with function returning an array of types', () => {
     expect(() =>
       schemaWithFieldType(
@@ -746,6 +733,7 @@ describe('Type System: Union types must be array', () => {
     ).not.to.throw();
   });
 
+  // TODO: move this to definition-test?
   it('rejects a Union type without types', () => {
     expect(() =>
       schemaWithFieldType(
@@ -753,26 +741,47 @@ describe('Type System: Union types must be array', () => {
           name: 'SomeUnion',
         }),
       ),
-    ).to.throw(
-      'Must provide Array of types or a function which returns such an array ' +
-        'for Union SomeUnion.',
-    );
+    ).not.to.throw();
+  });
+
+  it('accepts a Union type with member types', () => {
+    const schema = buildSchema(`
+      type Query {
+        test: GoodUnion
+      }
+
+      type TypeA {
+        field: String
+      }
+
+      type TypeB {
+        field: String
+      }
+
+      union GoodUnion =
+        | TypeA
+        | TypeB
+    `);
+    expect(validateSchema(schema)).to.deep.equal();
   });
 
   it('rejects a Union type with empty types', () => {
-    expect(() =>
-      schemaWithFieldType(
-        new GraphQLUnionType({
-          name: 'SomeUnion',
-          types: [],
-        }),
-      ),
-    ).to.throw(
-      'Must provide Array of types or a function which returns such an array ' +
-        'for Union SomeUnion.',
-    );
+    const schema = buildSchema(`
+      type Query {
+        test: BadUnion
+      }
+
+      union BadUnion
+    `);
+    expect(validateSchema(schema)).to.containSubset([
+      {
+        message: 'Union type BadUnion must define one or more member types.',
+        locations: [{ line: 6, column: 7 }],
+      },
+    ]);
   });
 
+  // TODO: move this to definition-test?
   it('rejects a Union type with incorrectly typed types', () => {
     expect(() =>
       schemaWithFieldType(
@@ -790,14 +799,81 @@ describe('Type System: Union types must be array', () => {
   });
 
   it('rejects a Union type with duplicated member type', () => {
-    expect(() =>
-      schemaWithFieldType(
-        new GraphQLUnionType({
-          name: 'SomeUnion',
-          types: [SomeObjectType, SomeObjectType],
-        }),
-      ),
-    ).to.throw('SomeUnion can include SomeObject type only once.');
+    const schema = buildSchema(`
+      type Query {
+        test: BadUnion
+      }
+
+      type TypeA {
+        field: String
+      }
+
+      type TypeB {
+        field: String
+      }
+
+      union BadUnion =
+        | TypeA
+        | TypeB
+        | TypeA
+    `);
+    expect(validateSchema(schema)).to.containSubset([
+      {
+        message: 'Union type BadUnion can only include type TypeA once.',
+        locations: [{ line: 15, column: 11 }, { line: 17, column: 11 }],
+      },
+    ]);
+  });
+
+  it('rejects a Union type with non-Object members types', () => {
+    const schema = buildSchema(`
+      type Query {
+        test: BadUnion
+      }
+
+      type TypeA {
+        field: String
+      }
+
+      type TypeB {
+        field: String
+      }
+
+      union BadUnion =
+        | TypeA
+        | String
+        | TypeB
+    `);
+    expect(validateSchema(schema)).to.containSubset([
+      {
+        message:
+          'Union type BadUnion can only include Object types, ' +
+          'it cannot contain String.',
+        locations: [{ line: 16, column: 11 }],
+      },
+    ]);
+
+    const badUnionMemberTypes = [
+      GraphQLString,
+      new GraphQLNonNull(SomeObjectType),
+      new GraphQLList(SomeObjectType),
+      SomeInterfaceType,
+      SomeUnionType,
+      SomeEnumType,
+      SomeInputObjectType,
+    ];
+    badUnionMemberTypes.forEach(memberType => {
+      const badSchema = schemaWithFieldType(
+        new GraphQLUnionType({ name: 'BadUnion', types: [memberType] }),
+      );
+      expect(validateSchema(badSchema)).to.containSubset([
+        {
+          message:
+            'Union type BadUnion may only contain Object types, ' +
+            `it cannot contain ${memberType}.`,
+        },
+      ]);
+    });
   });
 });
 
@@ -1485,7 +1561,7 @@ describe('Type System: Objects can only implement unique interfaces', () => {
     expect(validateSchema(schema)).to.containSubset([
       {
         message:
-          'BadObject must only implement Interface types, it cannot implement SomeInputObject.',
+          'Type BadObject must only implement Interface types, it cannot implement SomeInputObject.',
         locations: [{ line: 10, column: 33 }],
       },
     ]);
@@ -1507,9 +1583,34 @@ describe('Type System: Objects can only implement unique interfaces', () => {
     `);
     expect(validateSchema(schema)).to.containSubset([
       {
-        message:
-          'AnotherObject must declare it implements AnotherInterface only once.',
+        message: 'Type AnotherObject can only implement AnotherInterface once.',
         locations: [{ line: 10, column: 37 }, { line: 10, column: 55 }],
+      },
+    ]);
+  });
+
+  it('rejects an Object implementing the same interface twice due to extension', () => {
+    const schema = buildSchema(`
+      type Query {
+        test: AnotherObject
+      }
+
+      interface AnotherInterface {
+        field: String
+      }
+
+      type AnotherObject implements AnotherInterface {
+        field: String
+      }
+    `);
+    const extendedSchema = extendSchema(
+      schema,
+      parse('extend type AnotherObject implements AnotherInterface'),
+    );
+    expect(validateSchema(extendedSchema)).to.containSubset([
+      {
+        message: 'Type AnotherObject can only implement AnotherInterface once.',
+        locations: [{ line: 10, column: 37 }, { line: 1, column: 38 }],
       },
     ]);
   });
@@ -1759,8 +1860,8 @@ describe('Objects must adhere to Interface they implement', () => {
     expect(validateSchema(schema)).to.containSubset([
       {
         message:
-          '"AnotherInterface" expects field "field" but ' +
-          '"AnotherObject" does not provide it.',
+          'Interface field AnotherInterface.field expected but ' +
+          'AnotherObject does not provide it.',
         locations: [{ line: 7, column: 9 }, { line: 10, column: 7 }],
       },
     ]);
@@ -1783,8 +1884,8 @@ describe('Objects must adhere to Interface they implement', () => {
     expect(validateSchema(schema)).to.containSubset([
       {
         message:
-          'AnotherInterface.field expects type "String" but ' +
-          'AnotherObject.field is type "Int".',
+          'Interface field AnotherInterface.field expects type String but ' +
+          'AnotherObject.field is type Int.',
         locations: [{ line: 7, column: 31 }, { line: 11, column: 31 }],
       },
     ]);
@@ -1810,8 +1911,8 @@ describe('Objects must adhere to Interface they implement', () => {
     expect(validateSchema(schema)).to.containSubset([
       {
         message:
-          'AnotherInterface.field expects type "A" but ' +
-          'AnotherObject.field is type "B".',
+          'Interface field AnotherInterface.field expects type A but ' +
+          'AnotherObject.field is type B.',
         locations: [{ line: 10, column: 16 }, { line: 14, column: 16 }],
       },
     ]);
@@ -1874,8 +1975,8 @@ describe('Objects must adhere to Interface they implement', () => {
     expect(validateSchema(schema)).to.containSubset([
       {
         message:
-          'AnotherInterface.field expects argument "input" but ' +
-          'AnotherObject.field does not provide it.',
+          'Interface field argument AnotherInterface.field(input:) expected ' +
+          'but AnotherObject.field does not provide it.',
         locations: [{ line: 7, column: 15 }, { line: 11, column: 9 }],
       },
     ]);
@@ -1898,8 +1999,8 @@ describe('Objects must adhere to Interface they implement', () => {
     expect(validateSchema(schema)).to.containSubset([
       {
         message:
-          'AnotherInterface.field(input:) expects type "String" but ' +
-          'AnotherObject.field(input:) is type "Int".',
+          'Interface field argument AnotherInterface.field(input:) expects ' +
+          'type String but AnotherObject.field(input:) is type Int.',
         locations: [{ line: 7, column: 22 }, { line: 11, column: 22 }],
       },
     ]);
@@ -1922,14 +2023,14 @@ describe('Objects must adhere to Interface they implement', () => {
     expect(validateSchema(schema)).to.containSubset([
       {
         message:
-          'AnotherInterface.field expects type "String" but ' +
-          'AnotherObject.field is type "Int".',
+          'Interface field AnotherInterface.field expects type String but ' +
+          'AnotherObject.field is type Int.',
         locations: [{ line: 7, column: 31 }, { line: 11, column: 28 }],
       },
       {
         message:
-          'AnotherInterface.field(input:) expects type "String" but ' +
-          'AnotherObject.field(input:) is type "Int".',
+          'Interface field argument AnotherInterface.field(input:) expects ' +
+          'type String but AnotherObject.field(input:) is type Int.',
         locations: [{ line: 7, column: 22 }, { line: 11, column: 22 }],
       },
     ]);
@@ -1952,9 +2053,9 @@ describe('Objects must adhere to Interface they implement', () => {
     expect(validateSchema(schema)).to.containSubset([
       {
         message:
-          'AnotherObject.field(anotherInput:) is of required type ' +
-          '"String!" but is not also provided by the interface ' +
-          'AnotherInterface.field.',
+          'Object field argument AnotherObject.field(anotherInput:) is of ' +
+          'required type String! but is not also provided by the Interface ' +
+          'field AnotherInterface.field.',
         locations: [{ line: 11, column: 44 }, { line: 7, column: 9 }],
       },
     ]);
@@ -1994,8 +2095,8 @@ describe('Objects must adhere to Interface they implement', () => {
     expect(validateSchema(schema)).to.containSubset([
       {
         message:
-          'AnotherInterface.field expects type "[String]" but ' +
-          'AnotherObject.field is type "String".',
+          'Interface field AnotherInterface.field expects type [String] ' +
+          'but AnotherObject.field is type String.',
         locations: [{ line: 7, column: 16 }, { line: 11, column: 16 }],
       },
     ]);
@@ -2018,8 +2119,8 @@ describe('Objects must adhere to Interface they implement', () => {
     expect(validateSchema(schema)).to.containSubset([
       {
         message:
-          'AnotherInterface.field expects type "String" but ' +
-          'AnotherObject.field is type "[String]".',
+          'Interface field AnotherInterface.field expects type String but ' +
+          'AnotherObject.field is type [String].',
         locations: [{ line: 7, column: 16 }, { line: 11, column: 16 }],
       },
     ]);
@@ -2059,8 +2160,8 @@ describe('Objects must adhere to Interface they implement', () => {
     expect(validateSchema(schema)).to.containSubset([
       {
         message:
-          'AnotherInterface.field expects type "String!" but ' +
-          'AnotherObject.field is type "String".',
+          'Interface field AnotherInterface.field expects type String! ' +
+          'but AnotherObject.field is type String.',
         locations: [{ line: 7, column: 16 }, { line: 11, column: 16 }],
       },
     ]);
